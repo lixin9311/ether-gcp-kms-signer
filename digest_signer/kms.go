@@ -132,7 +132,8 @@ func (k *KMSSigner) SignDigest(ctx context.Context, address common.Address, dige
 	if !verifyDigest(address, digest, sig) {
 		sig[64] += 1
 		if !verifyDigest(address, digest, sig) {
-			return nil, fmt.Errorf("AsymmetricSign: signature failed, unable to determine V")
+			// some rare cases.
+			return sig, fmt.Errorf("AsymmetricSign: signature failed, unable to determine V")
 		}
 	}
 
