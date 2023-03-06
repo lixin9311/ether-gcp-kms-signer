@@ -103,40 +103,51 @@ func (k *KMSSigner) SignDigest(ctx context.Context, address common.Address, dige
 		DigestCrc32C: wrapperspb.Int64(int64(digestCRC32C)),
 	}
 
-	// Call the API.
-	result, err := k.client.AsymmetricSign(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if !result.VerifiedDigestCrc32C {
-		return nil, fmt.Errorf("AsymmetricSign: request corrupted in-transit")
-	}
-
-	if int64(crc32c(result.Signature)) != result.SignatureCrc32C.Value {
-		return nil, fmt.Errorf("AsymmetricSign: response corrupted in-transit")
-	}
-
-	// recover R and S from the signature
-	r, s, err := recoverRS(result.Signature)
-	if err != nil {
-		return nil, err
-	}
-
-	// Reconstruct the eth signature R || S || V
+	var resultErr error
 	sig := make([]byte, 65)
-	copy(sig[:32], r.Bytes())
-	copy(sig[32:64], s.Bytes())
-	sig[64] = 0x1b
-
-	// TODO: is ther a better way to determine the value of V?
-	if !verifyDigest(address, digest, sig) {
-		sig[64] += 1
-		if !verifyDigest(address, digest, sig) {
-			return nil, fmt.Errorf("AsymmetricSign: signature failed, unable to determine V")
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		resultErr = nil
+		// Call the API.
+		result, err := k.client.AsymmetricSign(ctx, req)
+		if err != nil {
+			resultErr = err
+			continue
 		}
+		if !result.VerifiedDigestCrc32C {
+			resultErr = fmt.Errorf("AsymmetricSign: request corrupted in-transit")
+			continue
+		}
+
+		if int64(crc32c(result.Signature)) != result.SignatureCrc32C.Value {
+			resultErr = fmt.Errorf("AsymmetricSign: response corrupted in-transit")
+			continue
+		}
+
+		// recover R and S from the signature
+		r, s, err := recoverRS(result.Signature)
+		if err != nil {
+			resultErr = err
+			continue
+		}
+
+		// Reconstruct the eth signature R || S || V
+		copy(sig[:32], r.Bytes())
+		copy(sig[32:64], s.Bytes())
+		sig[64] = 0x1b
+
+		// TODO: is ther a better way to determine the value of V?
+		if verifyDigest(address, digest, sig) {
+			return sig, nil
+		}
+		sig[64] += 1
+		if verifyDigest(address, digest, sig) {
+			return sig, nil
+		}
+		err = fmt.Errorf("AsymmetricSign: signature failed, unable to determine V")
 	}
 
-	return sig, nil
+	return sig, resultErr
 }
 
 func (l *KMSSigner) Close() error {
